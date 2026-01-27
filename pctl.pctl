@@ -1,0 +1,46 @@
+const int T = 40;
+
+P=? [ F<=40 "success" ]
+
+R{"latency_rtts"}=? [ F "success" ]
+
+R{"bandwidth_usage"}=? [ F "success" ]
+
+R{"compute_cost"}=? [ F "success" ]
+
+P>=1 [ G (is_success=>k_samples>=CUSTODY_REQUIREMENT&unique_sources>=UNIQUE_SOURCES_NEEDED) ]
+
+P>=1 [ G ((k_samples>0&stage!=0)=>P>=1 [ X (k_samples>0|(stage=0&k_samples=0)) ]) ]
+
+P>0 [ F "attestation_with_debt" ]
+
+P>=1 [ F ("success"|"dos_giveup") ]
+
+P>=1 [ G !"deadlock" ]
+
+P>=1 [ G (window_size<=MAX_WINDOW) ]
+
+P>=1 [ G (subnet_state=0=>P>=1 [ F (subnet_state!=0|stage=2) ]) ]
+
+P>=1 [ G ((stage=2&custody_status=1)=>subnet_state!=0) ]
+
+P>=1 [ G ((is_running&suspicion_count>=MAX_SUSPICION)=>P<=0 [ X stage=2 ]) ]
+
+P>=1 [ G ((fail_count>=MAX_FAIL_TOLERANCE)=>P>=1 [ F (fail_count=0|!is_running) ]) ]
+
+P>=1 [ G ((stage=2&p_malicious_init>0)=>unique_sources>=CUSTODY_REQUIREMENT) ]
+
+P>=1 [ G (window_size<=MAX_WINDOW) ]
+
+P=? [ F<=360 "escape_success" ]
+
+P=? [ F<=360 "complete_success" ]
+
+R{"compute_cost"}=? [ C<=360 ]
+
+R{"bandwidth_usage"}=? [ C<=360 ]
+
+P=? [ F<=360 "false_positive_vote" ]
+
+R{"latency_rtts"}=? [ C<=360 ]
+
