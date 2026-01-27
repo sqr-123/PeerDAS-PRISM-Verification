@@ -1,60 +1,63 @@
-// [Time Constants Definition]
-// T_dead: Attestation Deadline (4 seconds = 40 steps). Used for Timely Success.
-const int T_dead = 40;
-
-// T_max: Max Verification Horizon (3 Slots = 360 steps). Used for Self-Healing/Resilience.
-const int T_max = 360;
-
 // ============================================================================
-// Part 1: Quantitative Metrics (Experimental Analysis)
+// PCTL Property Specifications for PeerDAS Formal Analysis
 // ============================================================================
 
-// [Exp I, VII, VIII] Timely Success Rate (Efficiency Metric)
-// Probability of reaching consensus within the strict attestation deadline (4s).
-// Corresponds to T_dead in Table 1.
+const int T_dead = 40;  // Attestation Deadline (4s) for efficiency metrics
+const int T_max = 360;  // Max Horizon (3 Slots) for resilience metrics
+
+// ============================================================================
+// Part 1: Quantitative Metrics (Performance & Costs)
+// ============================================================================
+
+// [Q1] Probability of reaching consensus within 4s deadline (Efficiency)
 P=? [ F<=T_dead "success" ]
 
-// [Exp III] Adversarial Resilience (Self-Healing Metric)
-// Probability of an eclipsed node escaping and succeeding within the extended horizon (3 slots).
-// Corresponds to T_max in Table 1.
-P=? [ F<=T_max "escape_success" ]
-
-// [Exp V, IX] False Positive Rate (Safety Metric)
-// Probability of casting a vote for unavailable data within the deadline.
-P=? [ F<=T_dead "false_positive_vote" ]
-
-// [Exp I, IV] Average Consensus Latency
-// Expected cumulative RTTs to reach success (Unbounded, as it measures average).
+// [Q2] Expected cumulative RTTs to reach consensus (Avg Latency)
 R{"latency_rtts"}=? [ F "success" ]
 
-// [Exp II, VI] Cumulative Bandwidth Usage (Scalability)
-// Bandwidth cost accumulated strictly within the slot deadline.
-R{"bandwidth_usage"}=? [ C<=T_dead ]
+// [Q3] Expected bandwidth usage to reach consensus (Avg Bandwidth)
+R{"bandwidth_usage"}=? [ F "success" ]
 
-// [Exp II, VI] Cumulative Compute Cost (Scalability)
-// Compute cost accumulated strictly within the slot deadline.
-R{"compute_cost"}=? [ C<=T_dead ]
-
-// [Metric] Complete Success (Liveness + Integrity)
-// Achieving both consensus and full data custody within the deadline.
-P=? [ F<=T_dead "complete_success" ]
+// [Q4] Expected compute cost to reach consensus (Avg Compute)
+R{"compute_cost"}=? [ F "success" ]
 
 // ============================================================================
-// Part 2: Qualitative Properties (Table 3 Verification)
+// Part 2: Adversarial & Safety Metrics (Attack Scenarios)
 // ============================================================================
 
-// [P1] Existence of "Attestation-with-Debt" (Decoupling)
+// [Q5] Probability of self-healing from Eclipse via re-peering
+P=? [ F<=T_max "escape_success" ]
+
+// [Q6] Cumulative bandwidth consumption during attack window (Resource Exhaustion)
+R{"bandwidth_usage"}=? [ C<=T_max ]
+
+// [Q7] Cumulative compute cost during attack window (Resource Exhaustion)
+R{"compute_cost"}=? [ C<=T_max ]
+
+// [Q8] Cumulative latency/time-cost burden during attack window
+R{"latency_rtts"}=? [ C<=T_max ]
+
+// [Q9] Probability of voting for unavailable data under fraud attacks
+P=? [ F<=T_max "false_positive_vote" ]
+
+// [Q10] Probability of achieving both consensus and full data custody
+P=? [ F<=T_max "complete_success" ]
+
+// ============================================================================
+// Part 3: Qualitative Properties (Invariants & Liveness)
+// ============================================================================
+
+// [P1] Liveness: A valid path exists to vote without full custody (Decoupling)
 P>0 [ F "attestation_with_debt" ]
 
-// [P2] Resource Boundedness (Invariant)
+// [P2] Invariant: Window size never exceeds physical memory limit
 P>=1 [ G (window_size<=MAX_WINDOW) ]
 
-// [P3] Circuit Breaker Liveness (Non-blocking)
+// [P3] Liveness: System eventually recovers from max failures (No Zombie State)
 P>=1 [ G ((fail_count>=MAX_FAIL_TOLERANCE)=>P>=1 [ F (fail_count=0|!is_running) ]) ]
 
-// [P4] Sybil Resistance Invariant (Safety)
+// [P4] Safety: Successful votes in malicious env must have sufficient sources
 P>=1 [ G ((stage=2 & p_malicious_init>0) => unique_sources>=CUSTODY_REQUIREMENT) ]
 
-// [P5] Deadlock Freedom
+// [P5] Completeness: System is free from deadlocks
 P>=1 [ G !"deadlock" ]
-
