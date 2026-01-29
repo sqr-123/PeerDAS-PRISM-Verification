@@ -9,7 +9,7 @@ dtmc
 // =========================================================================
 
 // --- Experiment Variables ------------------------------------------------
-const int TOTAL_BLOBS;                      // Total Blobs after expansion
+const int TOTAL_BLOBS=6;                      // Total Blobs after expansion
 const int CUSTODY_REQUIREMENT = 4;          // Target Subnets (Custody Requirement)
 const int UNIQUE_SOURCES_NEEDED = CUSTODY_REQUIREMENT; // Target unique sources (Sybil resistance metric)
 const int MAX_NETWORK_LOAD = 5;             // Network congestion level cap
