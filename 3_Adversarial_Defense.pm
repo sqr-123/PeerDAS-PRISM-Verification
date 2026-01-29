@@ -10,10 +10,10 @@ dtmc
 
 // --- Experiment Variables ------------------------------------------------
 const int TOTAL_BLOBS = 6;                  // Total Blobs
-const int CUSTODY_REQUIREMENT;              // [Unified Param] Custody requirement (K value)
+const int CUSTODY_REQUIREMENT =4;          // Custody requirement (K value)
 const int UNIQUE_SOURCES_NEEDED = CUSTODY_REQUIREMENT; // Target unique sources
 const int MAX_NETWORK_LOAD = 5;             // Network load cap
-const int START_LOAD = 2;                   // [Experiment Variable] Initial load
+const int START_LOAD = 2;                   // Initial network load
 const int MAX_FAIL_TOLERANCE = 4;           // Failure tolerance limit
 const int MAX_WINDOW = 3;                   // Max window size
 const int HIGH_USAGE_THRES = 2;             // High load threshold
@@ -25,8 +25,8 @@ formula is_success = (stage = 2);                                   // System su
 formula is_running = !is_success;                                   // System running state
 formula is_high_usage = (network_load >= HIGH_USAGE_THRES);         // High load determination
 formula is_congested_env  = (network_load >= 3);                    // Congested environment determination
-formula need_switch = (fail_count >= MAX_FAIL_TOLERANCE);           // Circuit breaker determination
-formula is_eclipsed = (subnet_state = 0);                           // Whether eclipsed
+formula need_switch = (fail_count >= MAX_FAIL_TOLERANCE);           // Circuit breaker trigger condition
+formula is_eclipsed = (subnet_state = 0);                           // Eclipsed state flag
 formula is_data_saturated = (k_samples >= CUSTODY_REQUIREMENT);     // Data saturation check
 
 // -------------------------------------------------------------------------
@@ -48,17 +48,19 @@ formula p_matrix_stay = 1.0 - p_matrix_spike - p_matrix_ease;
 // =========================================================================
 // [2] Attack Model Parameters (Eclipse & Sybil)
 // =========================================================================
-const double p_malicious_init;              // [Experiment Variable] Initial malicious ratio
+const double p_malicious_init =0.1;          // Initial malicious ratio
 const double P_ECLIPSED_DENSITY = 0.9;      // Malicious density after Eclipse
-const double ATTACK_SILENT = 0.1;           // Silent attack probability
-const double RATE_SELECTIVE_DISCLOSURE = 0.8; // Selective disclosure probability
+const double ATTACK_SILENT =0.5;           // Silent attack probability
+const double RATE_SELECTIVE_DISCLOSURE =0.1; // Selective disclosure probability
 const double ADVERSARIAL_FILTERING_COEFF = 1; // Adversary filtering coeff (libp2p/GossipSub)
 const double ECLIPSE_LEAK_FACTOR = 0.1;     // Data leak factor under Eclipse
 const double MIN_ATTACK_CPU_LOAD = 0.5;     // Min CPU load for attack traffic
 
 // [Formula] Attack Strategies & Probabilities
+// Logic Update: Removed explicit check for p_malicious_init > 0 to eliminate God View.
+// The probability is now purely derived from the calculated current state.
 formula p_curr_mal = (subnet_state=1) ? (p_malicious_init * ADVERSARIAL_FILTERING_COEFF) : P_ECLIPSED_DENSITY;
-formula p_mal = (p_malicious_init > 0) ? p_curr_mal : 0.0;
+formula p_mal = p_curr_mal;
 formula p_hon = 1.0 - p_mal;
 
 formula strategy_p_silent = ATTACK_SILENT;
@@ -67,14 +69,14 @@ formula strategy_p_griefing = max(0.0, 1.0 - strategy_p_silent - strategy_p_disc
 
 formula p_interaction_fails = p_tx_success * strategy_p_griefing; 
 formula p_disclosure_succeeds = p_tx_success * strategy_p_disclosure;   
-formula p_bad_silent = 1.0 - p_interaction_fails - strategy_p_disclosure; 
-formula p_bad_is_active = p_interaction_fails + strategy_p_disclosure; 
+formula p_bad_silent = 1.0 - p_interaction_fails - p_disclosure_succeeds; 
+formula p_bad_is_active = p_interaction_fails + p_disclosure_succeeds; 
 
 // =========================================================================
 // [3] Defense & Suspicion Mechanism
 // =========================================================================
 const int MAX_SUSPICION = 5;                // Max suspicion score cap
-const int PENALTY_GRIEFING = 5;             // Penalty for griefing
+const int PENALTY_GRIEFING =5 ;             // Penalty for griefing
 const int PENALTY_SILENT = 2;               // Penalty for silence
 const int DECAY_RATE = 1;                   // Suspicion decay rate
 const int PENALTY_MINOR = 1;                // Minor penalty
@@ -85,7 +87,10 @@ const double P_INTRUSION_LOW_RISK = 0.02;
 const double P_INTRUSION_BASE_NOISE = 0.001;
 
 // [Formula] Intrusion & Escape Probabilities
-formula p_intrusion_prob = (p_malicious_init > 0 & subnet_state=1) ? 
+// Logic Update: Removed explicit check for p_malicious_init > 0.
+// Intrusion suspicion is now based solely on subnet state, load, and history.
+// P_INTRUSION_BASE_NOISE ensures even honest networks have a non-zero (but low) suspicion rate due to noise.
+formula p_intrusion_prob = (subnet_state=1) ? 
     ((network_load >= 3) ? 
         ((suspicion_count >= 2) ? P_INTRUSION_HIGH_RISK : P_INTRUSION_MED_RISK) : 
         ((suspicion_count >= 2) ? P_INTRUSION_LOW_RISK : max(0.005, P_INTRUSION_BASE_NOISE))) : 0.0;
@@ -151,12 +156,12 @@ formula p_routing_validity = (network_load >= 4) ? 0.20 : max(MIN_ROUTING_VALIDI
 formula dynamic_old_peer_prob_honest = base_old_peer_prob * p_routing_validity;
 formula p_eff_old = (subnet_state = 0) ? (dynamic_old_peer_prob_honest * ECLIPSE_LEAK_FACTOR) : dynamic_old_peer_prob_honest;
 
-// [Formula] Block Propagation Probability (Aligned with Model 1)
+// [Formula] Block Propagation Probability
 formula p_block_prop_success = (network_load <= 2) ? 1.0 :
                                ((network_load = 3) ? 0.95 :
                                ((network_load = 4) ? 0.70 : 0.30));
 
-// [Formula] Physical Repair Probability (Aligned with Model 2)
+// [Formula] Physical Repair Probability
 formula p_dht_lookup_success = (network_load <= 2) ? 0.95 : 
                                ((network_load = 3) ? 0.50 : 0.05);
 formula P_REPAIR_OUTCOME = (subnet_state = 0) ? 0.0 : p_dht_lookup_success;
@@ -209,12 +214,12 @@ formula p_w3_1b_0disc = p_w3_mixed_good * p_interaction_fails;
 formula p_w3_1b2g_slow = p_w3_mixed_good * p_bad_silent;
 
 // Window 2 Honest Branch
-formula prob_s2_2 = pow(prob_find_new, 2);              
+formula prob_s2_2 = pow(prob_find_new, 2);               
 formula prob_s2_1 = 2 * prob_find_new * p_same;         
-formula prob_s2_0 = pow(p_same, 2);    
+formula prob_s2_0 = pow(p_same, 2);     
 
 // Window 3 Honest Branch
-formula prob_s3_3 = pow(prob_find_new, 3);              
+formula prob_s3_3 = pow(prob_find_new, 3);               
 formula prob_s3_2 = 3 * pow(prob_find_new, 2) * p_same; 
 formula prob_s3_1 = 3 * prob_find_new * pow(p_same, 2); 
 formula prob_s3_0 = pow(p_same, 3); 
@@ -230,7 +235,7 @@ const double DHT_QUERY_KB = 2.0;            // DHT query overhead
 const double REPEER_METADATA_KB = 2.0;      // Re-peering metadata overhead
 const double REPEER_COST_FACTOR = 3.0;      // Re-peering cost factor
 const double COEFF_PEERDAS = 0.192;         // Latency coeff
-const double RPC_OVERHEAD = 1.15;           // RPC overhead
+const double RPC_OVERHEAD = 1.15;            // RPC overhead
 
 // [Formula] Dynamic Resource Calculation
 const double BASE_SAMPLE_COST = 1.0;
@@ -250,12 +255,9 @@ formula latency_physics_cost = (TOTAL_BLOBS * COEFF_PEERDAS) * congestion_factor
 
 // [Formula] Waste Multiplier (Congestion impact on headers/retransmits)
 formula waste_multiplier = (network_load <= 3) ? 1.0 : 
-                          ((network_load = 4) ? 1.3 : 2.5);
+                           ((network_load = 4) ? 1.3 : 2.5);
 
 // [Core Logic] Resource Interception Coefficient
-// 1. If defense disabled (PENALTY_GRIEFING=0) -> 1.0 (Full attack impact)
-// 2. If defense enabled & high trust (credit=1) -> 1.0 (Normal processing)
-// 3. If defense enabled & trust bankrupt (credit=0) -> 0.1 (Firewall interception)
 const double FIREWALL_LEAKAGE = 0.1;
 formula resource_factor = (trust_credit=1 | PENALTY_GRIEFING=0) ? 1.0 : FIREWALL_LEAKAGE;
 
@@ -267,6 +269,7 @@ formula p_arrival_with_payload = p_payload_honest + p_payload_griefing;
 formula p_send_payload_group = p_hon + (p_mal * strategy_p_griefing);
 formula p_send_header_only_group = p_mal * strategy_p_disclosure;
 formula p_payload_verification_ratio = p_hon + (p_mal * strategy_p_griefing);
+
 // =========================================================================
 // [5] System Module (PeerDAS Logic with Safety & Defense)
 // =========================================================================
@@ -304,11 +307,10 @@ module System
     // =========================================================================
     
     // [Step A: Start Wait] 
-    // Consume physical time immediately upon init
     [] (is_running) & (stage=0) & (step=0) & (backoff_timer=0) & (gossip_waited=0) -> 
         1.0 : 
             (backoff_timer' = GOSSIP_PROP_TICKS) & 
-            (gossip_waited' = 1) &                 
+            (gossip_waited' = 1) &                  
             (step' = 1);
 
     // [Step B: Gossip Resolution]
@@ -317,7 +319,6 @@ module System
         // Branch 1: Block Header propagation success
         p_block_prop_success : 
             (stage' = 1) & 
-            // Note: Custody data must be retrieved via Subnet subscription in Stage 1
             (custody_status' = 0) &  
             (step' = 1) +
             
@@ -331,12 +332,7 @@ module System
     // =========================================================================
     // [Action 0: Defense Mechanism - Forced Re-peering]
     // =========================================================================
-    // Hybrid Circuit Breaker Logic:
-    // Trigger A: High suspicion (Confirmed Attack)
-    // Trigger B: Consecutive failures (Performance Degradation)
-    // Constraint: Active only when malicious peers exist (p_malicious_init > 0)
     [] (is_running) & (step=0) & (stage=1) & (backoff_timer=0) & 
-       (p_malicious_init > 0) & 
        (
          (suspicion_count >= MAX_SUSPICION) | 
          ((fail_count >= MAX_FAIL_TOLERANCE))
@@ -357,23 +353,18 @@ module System
     // =========================================================================
 
     // [Action 1a: Attempt Finalization]
-    // Logic: If sampling is sufficient, allow entry to Stage 2 (Voting) regardless of
-    // Eclipse status or custody failure. Custody cost is handled in Rewards.
     [] (is_running) & (step=0) & (stage=1) & (backoff_timer=0) & (need_switch) & (suspicion_count < MAX_SUSPICION) & 
        (k_samples >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED) -> 
        
-        // Branch A: Safe Success (Consensus + Custody Data)
-        // Condition: Not Eclipsed AND Physical Success
+        // Branch A: Safe Success
         p_custody_success_safe :
             (stage' = 2) & 
             (custody_status' = 1) & 
-            (fail_count' = (p_malicious_init > 0) ? fail_count : 0) &
+            (fail_count' = 0) & 
             (backoff_timer' = 1) & 
             (step' = 1) +
             
-        // Branch B: Custody Fail / Eclipse Hidden Defect
-        // Condition: Eclipsed OR Physical Loss
-        // Mark custody_status=0 to trigger background repair cost
+        // Branch B: Success with Debt
         (1.0 - p_custody_success_safe) :
             (stage' = 2) & 
             (custody_status' = 0) & 
@@ -382,9 +373,9 @@ module System
             (step' = 1);
 
     // [Action 1b: Explicit Sampling Failure]
-    // Trigger: Insufficient samples (k < K), mandatory repair
+    // The node forces repair based solely on insufficient Unique Sources, regardless of environment.
     [] (is_running) & (step=0) & (stage=1) & (backoff_timer=0) & (suspicion_count < MAX_SUSPICION) & 
-       (need_switch | ((p_malicious_init > 0) & (k_samples >= CUSTODY_REQUIREMENT))) &
+       (need_switch | (k_samples >= CUSTODY_REQUIREMENT)) &
        (
          (k_samples < CUSTODY_REQUIREMENT) | 
          (unique_sources < UNIQUE_SOURCES_NEEDED) 
@@ -414,20 +405,16 @@ module System
             (step' = 1) +
 
         // --- Branch B: Retry with Smart Cleaning ---
-        // Logic: If Sybil suspected AND Malicious env -> Clean data; Else -> Retain
         ((1.0 - P_REPAIR_OUTCOME) * ((retry_count < MAX_TOTAL_RETRIES) ? 1.0 : 0.0)) : 
             (stage' = 1) &                
             (fail_count' = 0) & 
             (retry_count' = retry_count + 1) & 
             (window_size' = 1) &          
             (backoff_timer' = COST_RETRY_DELAY) & 
-            
-            (suspicion_count' = (p_malicious_init > 0) ? min(MAX_SUSPICION, suspicion_count + 1) : 0) &
-            (trust_credit' = 0) &
-            
-            (k_samples' = ((k_samples >= CUSTODY_REQUIREMENT) & (unique_sources < UNIQUE_SOURCES_NEEDED) & (p_malicious_init > 0)) ? 0 : k_samples) & 
-            (unique_sources' = ((k_samples >= CUSTODY_REQUIREMENT) & (unique_sources < UNIQUE_SOURCES_NEEDED) & (p_malicious_init > 0)) ? 0 : unique_sources) &
-            
+            (suspicion_count' = min(MAX_SUSPICION, suspicion_count + 1)) &
+            (trust_credit' = 0) &        
+            (k_samples' = ((k_samples >= CUSTODY_REQUIREMENT) & (unique_sources < UNIQUE_SOURCES_NEEDED)) ? 0 : k_samples) & 
+            (unique_sources' = ((k_samples >= CUSTODY_REQUIREMENT) & (unique_sources < UNIQUE_SOURCES_NEEDED)) ? 0 : unique_sources) &
             (step' = 1) +
 
         // --- Branch C: Hard Reset ---
@@ -435,28 +422,20 @@ module System
             (stage' = 0) & 
             (fail_count' = 0) & 
             (retry_count' = 0) &           
-            
             (k_samples' = 0) & 
             (unique_sources' = 0) & 
-            (window_size' = MAX_WINDOW) &  
-            
-            (suspicion_count' = (p_malicious_init > 0) ? MAX_SUSPICION : 0) &
-            (trust_credit' = 0) &          
-            
+            (window_size' = MAX_WINDOW) &             
+            (suspicion_count' = MAX_SUSPICION) &
+            (trust_credit' = 0) &
             (gossip_waited' = 0) & 
-
             (backoff_timer' = SLOT_PENALTY) & 
             (step' = 1);
     
     // [Action 0.5: Resolve Re-peering Result]
-    // Resolve when timer expires in Recovery State (2)
     [] (is_running) & (step=0) & (stage=1) & (backoff_timer=0) & (subnet_state=2) ->
-        // Branch 1: Escaped to Safe Zone
         p_escape_success : 
            (subnet_state' = 1) & 
            (step' = 1) +
-
-        // Branch 2: Failed, Trapped in Eclipse
         (1.0 - p_escape_success) : 
             (subnet_state' = 0) & 
             (step' = 1);
@@ -466,112 +445,95 @@ module System
     // =========================================================================
     [] (is_running) & (step=0) & (stage=1) & (backoff_timer=0) & (fail_count < MAX_FAIL_TOLERANCE) & (!need_switch) & (window_size=1) & (subnet_state != 2) & (suspicion_count < MAX_SUSPICION) ->
         
-        // --- 1. Malicious Branches (Trust Reset) ---
-        
+        // 2.1 Malicious: Griefing (Invalid Data)
         (p_mal * p_interaction_fails) : 
             (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & 
             (suspicion_count' = min(MAX_SUSPICION, suspicion_count + PENALTY_GRIEFING)) & 
             (trust_credit' = 0) & 
             (window_size' = 1) & (stage' = stage) & (backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
             
+        // 2.2 Malicious: Silent (Timeout)
         (p_mal * p_bad_silent) : 
             (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & 
             (suspicion_count' = min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT)) & 
             (trust_credit' = 0) & 
             (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
             
+        // 2.3 Malicious: Selective Disclosure (False Positive)
         (p_mal * p_disclosure_succeeds) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + 1)) & 
             (fail_count' = 0) & 
-            
-            // Decrease suspicion but keep trust (False Positive Trust)
             (suspicion_count' = max(0, suspicion_count - DECAY_RATE)) & 
             (trust_credit' = 1) & 
-            
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + 1) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (window_size' = 1) & (backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
 
-
-        // --- 2. Honest/Success Branches (Merged & Trust Logic Applied) ---
-
-        // Branch 4: [New Data Success]
+        // 2.4 Honest: Valid Data (New Peer)
         (p_hon * p_log_valid * prob_find_new * p_eff_new) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = min(MAX_WINDOW, window_size+1)) & 
             (fail_count' = 0) & 
-            
-            // Slow Trust Recovery
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE ) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
-            
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE ) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (backoff_timer' = 1) & (step' = 1) +
 
-        // Branch 5: [Old Data Success]
+        // 2.5 Honest: Valid Data (Old Peer)
         (p_hon * p_log_valid * (1-prob_find_new) * p_eff_old) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = unique_sources) & 
             (window_size' = min(MAX_WINDOW, window_size+1)) & 
             (fail_count' = 0) & 
-            
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
-            
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
             
-        // Branch 6: No Data (Stagnation)
-        // Honest peer empty is normal, retain trust (Congestion Exemption)
+        // 2.6 Honest: Data Missing / Peer Empty
         (p_hon * p_log_valid * (1.0 - (prob_find_new * p_eff_new) - ((1-prob_find_new) * p_eff_old))) : 
             (k_samples' = k_samples) & (unique_sources' = unique_sources) & (window_size' = window_size) & (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count + 1)) &
             (suspicion_count' = max(0, suspicion_count - 1)) & 
             (trust_credit' = trust_credit) & 
             (stage' = stage) & (backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
             
-        // Branch 7: Physical Loss -> RPC Repair
-        // RPC Success: Hard won success, allow credit accumulation
+        // 2.7 Honest: Physical Waste -> RPC Repair (Success)
          (p_hon * p_outcome_waste_good * P_RPC_EFFECTIVE) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = window_size) & 
             (fail_count' = 0) &            
-            
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
-
+         (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (backoff_timer' = COST_SUBNET_RPC) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (step' = 1) +
 
-        // RPC Fail
-        // Physical failure, retain trust
+        // 2.8 Honest: Physical Waste -> RPC Repair (Fail -> DHT)
           (p_hon * p_outcome_waste_good * (1.0 - P_RPC_EFFECTIVE)) : 
           (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & 
           (window_size' = max(1, floor(window_size / 2))) &
-          (suspicion_count' = (p_malicious_init > 0) ? min(MAX_SUSPICION, suspicion_count + PENALTY_MINOR) : 0) &
-          (trust_credit' = trust_credit) & 
+          (suspicion_count' = min(MAX_SUSPICION, suspicion_count + PENALTY_MINOR)) &
+          (trust_credit' = trust_credit) &
           (backoff_timer' = COST_DHT_REPAIR) &
           (stage' = stage) & (step' = 1) +
           
-        // Branch 8: Honest Spin
+        // 2.9 Honest: Spin (Wait)
         (p_hon * p_hon_spin) : (trust_credit' = trust_credit) & (backoff_timer' = COST_SAMPLE_RTT) & (step' = 1);
 
-    // =========================================================================
-    // [Action 3: Window = 2] (Parallel Mode with Trust & Sybil Logic)
+// =========================================================================
+    // [Action 3: Window = 2
     // =========================================================================
     [] (is_running) & (step=0) & (stage=1) & (backoff_timer=0) & (fail_count < MAX_FAIL_TOLERANCE) & (!need_switch) & (window_size=2) & (subnet_state != 2) & (suspicion_count < MAX_SUSPICION) ->
         
         // --- 1. Malicious Branches ---
-        
         (p_w2_all_mal * (1.0 - pow(1.0 - p_interaction_fails, 2))) : 
             (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = min(MAX_SUSPICION, suspicion_count + PENALTY_GRIEFING)) & (trust_credit' = 0) & (window_size' = 1) & (stage' = stage) & (step' = 1) +
 
         (p_w2_all_mal * (pow(p_bad_silent + p_disclosure_succeeds, 2) - pow(p_disclosure_succeeds, 2))) : 
             (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT)) & (trust_credit' = 0) & (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
 
-        // Two malicious nodes succeed simultaneously
         (p_w2_all_mal * pow(p_disclosure_succeeds, 2)) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + 2)) & 
@@ -589,17 +551,16 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (fail_count' = 0) & (window_size' = 2) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
 
         // [Mixed Failure A]
         (p_w2_mix_slow * (1.0 - (p_log_valid * p_eff_new))) : 
-            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = ((p_malicious_init > 0) & (network_load < HIGH_USAGE_THRES)) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
+            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = (network_load < HIGH_USAGE_THRES) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
             
         // [Mixed Success B]
-        // 1 Malicious Success + 1 Honest Success = 2 Samples
         (p_w2_mix_disc * p_log_valid * p_eff_new) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0) + 1)) & 
@@ -609,31 +570,29 @@ module System
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0) + 1) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (backoff_timer' = COST_SAMPLE_RTT )&(step' = 1) +
 
-        // 1 Malicious Fail + 1 Honest Success = 1 Sample
         (p_w2_mix_fail * p_log_valid * p_eff_new) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (fail_count' = 0) & (window_size' = 2) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (backoff_timer' = COST_SAMPLE_RTT )&(step' = 1) +
             
         // [Mixed Failure B]
         ((p_w2_mix_disc + p_w2_mix_fail) * (1.0 - (p_log_valid * p_eff_new))) : 
-            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = ((p_malicious_init > 0) & (network_load < HIGH_USAGE_THRES)) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (stage' = stage) & (step' = 1) +
+            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = (network_load < HIGH_USAGE_THRES) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (stage' = stage) & (step' = 1) +
 
         // --- 3. Honest Branches ---
 
         // [CASE A: All Valid Success]
-        
         // A.1: 2 New
         (p_w2_all_hon * pow(p_log_valid, 2) * prob_s2_2 * pow(p_eff_new, 2)) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0))) & 
             (window_size' = min(MAX_WINDOW, window_size+1)) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
         
         // A.2: 1 New 1 Old
@@ -641,8 +600,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = min(MAX_WINDOW, window_size+1)) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // A.3: 1 New 1 Old(Empty)
@@ -650,29 +609,28 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = min(MAX_WINDOW, window_size+1)) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // A.4: 2 Old
         (p_w2_all_hon * pow(p_log_valid, 2) * prob_s2_0 * pow(p_eff_old, 2)) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & (unique_sources' = unique_sources) & (window_size' = min(MAX_WINDOW, window_size+1)) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - 1) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - 1) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // A.5: 2 Old (1 Empty)
         (p_w2_all_hon * pow(p_log_valid, 2) * prob_s2_0 * 2 * p_eff_old * (1-p_eff_old)) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & (unique_sources' = unique_sources) & (window_size' = min(MAX_WINDOW, window_size+1)) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // A.6: 2 Old (Both Empty)
-        // Honest peer empty, retain trust
         (p_w2_all_hon * pow(p_log_valid, 2) * prob_s2_0 * pow(1-p_eff_old, 2)) : 
             (k_samples' = k_samples) & (unique_sources' = unique_sources) & (window_size' = window_size) & (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count + 1)) &
-            (suspicion_count' = (p_malicious_init > 0) ? max(0, suspicion_count - DECAY_RATE) : 0) & 
+            (suspicion_count' = max(0, suspicion_count - DECAY_RATE)) & 
             (trust_credit' = trust_credit) & 
             (stage' = stage) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
 
@@ -683,22 +641,21 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
             
         // B.2: 1 Old (Valid)
         (p_w2_all_hon * (2 * p_phys_tx * p_outcome_waste_good) * (1-prob_find_new) * p_eff_old) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & (unique_sources' = unique_sources) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
             
         // B.3: 1 Old (Empty)
-        // Physical loss causes empty data, retain trust
         (p_w2_all_hon * (2 * p_phys_tx * p_outcome_waste_good) * (1.0 - (prob_find_new * p_eff_new) - ((1-prob_find_new) * p_eff_old))) : 
             (k_samples' = k_samples) & (unique_sources' = unique_sources) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count + 1)) &
-            (suspicion_count' = (p_malicious_init > 0) ? (((network_load < HIGH_USAGE_THRES)) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : max(0, suspicion_count - DECAY_RATE)) : 0) & 
+            (suspicion_count' = (network_load < HIGH_USAGE_THRES) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : max(0, suspicion_count - DECAY_RATE)) & 
             (trust_credit' = trust_credit) & 
             (stage' = stage) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
             
@@ -709,28 +666,27 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (backoff_timer' = COST_SUBNET_RPC) &
             (window_size' = max(1, floor(window_size/2))) & 
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (step' = 1) +
 
       // RPC Fail
-      // Physical failure, retain trust
          (p_w2_all_hon * pow(p_outcome_waste_good, 2) * (1.0 - P_RPC_EFFECTIVE)) : 
          (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & 
          (window_size' = max(1, floor(window_size/2))) & 
-        (suspicion_count' = (p_malicious_init > 0) ? min(MAX_SUSPICION, suspicion_count + PENALTY_MINOR) : 0) &
+         (suspicion_count' = min(MAX_SUSPICION, suspicion_count + PENALTY_MINOR)) &
          (trust_credit' = trust_credit) & 
          (backoff_timer' = COST_DHT_REPAIR) & 
          (stage' = stage) & (step' = 1) +
 
-        // [Spinning Complement]
+        // [Spinning Complement] 
        (p_w2_all_hon * max(0.0, pow(p_phys_tx, 2) - pow(p_log_valid, 2))) : (trust_credit' = trust_credit) & (backoff_timer' = COST_SAMPLE_RTT) & (step' = 1);
 
     // =========================================================================
-    // [Action 4: Window = 3] (Max Parallelism)
+    // [Action 4: Window = 3] 
     // =========================================================================
     [] (is_running) & (step=0) & (stage=1) & (backoff_timer=0) & (fail_count < MAX_FAIL_TOLERANCE) & (!need_switch) & (window_size=3) & (subnet_state != 2) & (suspicion_count < MAX_SUSPICION) ->
         
@@ -751,29 +707,29 @@ module System
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 3) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + 3) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (step' = 1) +
 
-        // --- Mixed Scenarios ---
+        // --- Mixed Scenarios (Original Simplified) ---
         
         // Scene A: 2 Bad 1 Good (Success)
         (p_w3_2b1g_slow * p_log_valid * p_eff_new) :
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (fail_count' = 0) & (window_size' = 1) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
             
         // Scene A: 2 Bad 1 Good (Fail)
         (p_w3_2b1g_slow * (1.0 - (p_log_valid * p_eff_new))) :
-            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = ((p_malicious_init > 0) & (network_load < HIGH_USAGE_THRES)) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
+            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = (network_load < HIGH_USAGE_THRES) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
 
         // Scene B: 1 Bad 2 Good (Success)
         (p_w3_1b2g_slow * pow(p_log_valid * p_eff_new, 2)) :
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0))) & 
             (fail_count' = 0) & (window_size' = 3) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
         
@@ -789,15 +745,15 @@ module System
         
         // Scene B: 1 Bad 2 Good (Fail)
         (p_w3_1b2g_slow * pow(1.0 - (p_log_valid * p_eff_new), 2)) :
-            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = ((p_malicious_init > 0) & (network_load < HIGH_USAGE_THRES)) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
+            (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = (network_load < HIGH_USAGE_THRES) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (backoff_timer' = (fail_count + 1 >= MAX_FAIL_TOLERANCE) ? 0 : TIMEOUT_DELAY) & (stage' = stage) & (step' = 1) +
 
         // Other Mixed (Success -> Split)
         ((p_w3_2b_2disc + p_w3_2b_1disc + p_w3_2b_0disc) * p_log_valid * p_eff_new) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (fail_count' = 0) & (window_size' = 1) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (step' = 1) +
             
@@ -809,8 +765,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0))) & 
             (fail_count' = 0) & (window_size' = 3) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (step' = 1) +           
         
@@ -825,9 +781,9 @@ module System
             (step' = 1) +      
         
         // Other Mixed (Fail)
-        ((p_w3_1b_1disc + p_w3_1b_0disc) * pow(1.0 - (p_log_valid * p_eff_new), 2)) : (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = ((p_malicious_init > 0) & (network_load < HIGH_USAGE_THRES)) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (stage' = stage) & (step' = 1) +
+        ((p_w3_1b_1disc + p_w3_1b_0disc) * pow(1.0 - (p_log_valid * p_eff_new), 2)) : (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & (suspicion_count' = (network_load < HIGH_USAGE_THRES) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : suspicion_count) & (trust_credit' = 0) & (window_size' = 1) & (stage' = stage) & (step' = 1) +
 
-        // --- [Honest Branch] ---
+        // --- [Honest Branch]  ---
         
         // CASE A: 3 Success (All valid)
         
@@ -836,8 +792,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+3)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?3:0))) & 
             (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 3) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?3:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
 
         // 2. [2 New + 1 Old]
@@ -846,8 +802,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+3)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0))) & 
             (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 3) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
 
         // 2.2 Old Peer Empty
@@ -855,8 +811,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0))) & 
             (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
 
         // 3. [1 New + 2 Old]
@@ -865,8 +821,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+3)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 3) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
         
         // 3.2 One Old Peer Has Data
@@ -874,8 +830,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
         
         // 3.3 Zero Old Peers Have Data
@@ -883,36 +839,35 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
 
         // 4. [3 Old]
         // 4.1 Three Old Peers Have Data
         (p_w3_all_hon * pow(p_log_valid, 3) * prob_s3_0 * pow(p_eff_old, 3)) :
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+3)) & (unique_sources' = unique_sources) & (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 3) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // 4.2 Two Old Peers Have Data
         (p_w3_all_hon * pow(p_log_valid, 3) * prob_s3_0 * 3 * pow(p_eff_old, 2) * (1-p_eff_old)) :
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & (unique_sources' = unique_sources) & (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (step' = 1) +
         
         // 4.3 One Old Peer Has Data
         (p_w3_all_hon * pow(p_log_valid, 3) * prob_s3_0 * 3 * p_eff_old * pow(1-p_eff_old, 2)) :
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & (unique_sources' = unique_sources) & (window_size' = MAX_WINDOW) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? max(0, suspicion_count - DECAY_RATE) : 0) & 
+            (suspicion_count' = max(0, suspicion_count - DECAY_RATE)) & 
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // 4.4 Zero Old Peers Have Data
-        // Honest peer empty, retain trust
         (p_w3_all_hon * pow(p_log_valid, 3) * prob_s3_0 * pow(1-p_eff_old, 3)) :
             (k_samples' = k_samples) & (unique_sources' = unique_sources) & (window_size' = window_size) & (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count + 1)) &
-            (suspicion_count' = (p_malicious_init > 0) ? max(0, suspicion_count - DECAY_RATE) : 0) & 
+            (suspicion_count' = max(0, suspicion_count - DECAY_RATE)) & 
             (trust_credit' = trust_credit) & 
             (stage' = stage) &(backoff_timer' = 1) & (step' = 1) +
 
@@ -923,8 +878,8 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0))) & 
             (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?2:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // 1.2 [1 New + 1 Old (Valid)]
@@ -932,36 +887,36 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
         
         // 1.3 [2 Old (Valid)]
         (p_w3_all_hon * 3 * pow(p_phys_tx, 2) * p_outcome_waste_good * prob_s2_0 * pow(p_eff_old, 2)) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+2)) & (unique_sources' = unique_sources) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 2) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
 
         // 2.1 [1 New + 1 Old (Invalid)]
         (p_w3_all_hon * 3 * pow(p_phys_tx, 2) * p_outcome_waste_good * prob_s2_1 * p_eff_new * (1-p_eff_old)) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources+1)) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + 1) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & (backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
         
         // 2.2 [1 Old (Valid) + 1 Old (Invalid)]
         (p_w3_all_hon * 3 * pow(p_phys_tx, 2) * p_outcome_waste_good * prob_s2_0 * 2 * p_eff_old * (1-p_eff_old)) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & (unique_sources' = unique_sources) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) &(step' = 1) +
 
         // 3. Zero Valid Samples (2 Old Invalid)
         // Physical loss causes empty data, retain trust
         (p_w3_all_hon * 3 * pow(p_phys_tx, 2) * p_outcome_waste_good * prob_s2_0 * pow(1-p_eff_old, 2)) : 
             (k_samples' = k_samples) & (unique_sources' = unique_sources) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count + 1)) &
-            (suspicion_count' = (p_malicious_init > 0) ? max(0, suspicion_count - DECAY_RATE) : 0) & 
+          (suspicion_count' = max(0, suspicion_count - DECAY_RATE)) & 
             (trust_credit' = trust_credit) & 
             (stage' = stage) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
 
@@ -972,21 +927,21 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
         
         // 2. [1 Old (Valid)]
         (p_w3_all_hon * 3 * p_phys_tx * pow(p_outcome_waste_good, 2) * (1-prob_find_new) * p_eff_old) : 
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & (unique_sources' = unique_sources) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (unique_sources >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
             
-        // 3. [1 Old (Invalid)]
+        // 3. [1 Old (Invalid)] 
         (p_w3_all_hon * 3 * p_phys_tx * pow(p_outcome_waste_good, 2) * (1-prob_find_new) * (1-p_eff_old)) : 
             (k_samples' = k_samples) & (unique_sources' = unique_sources) & (window_size' = max(1, floor(window_size/2))) & (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count + 1)) &
-            (suspicion_count' = (p_malicious_init > 0) ? (((network_load < HIGH_USAGE_THRES)) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : max(0, suspicion_count - DECAY_RATE)) : 0) & 
+            (suspicion_count' = (network_load < HIGH_USAGE_THRES) ? min(MAX_SUSPICION, suspicion_count + PENALTY_SILENT) : max(0, suspicion_count - DECAY_RATE)) & 
             (trust_credit' = trust_credit) & 
             (stage' = stage) &(backoff_timer' = COST_SAMPLE_RTT) & (step' = 1) +
 
@@ -997,19 +952,18 @@ module System
             (k_samples' = min(CUSTODY_REQUIREMENT, k_samples+1)) & 
             (unique_sources' = min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0))) & 
             (fail_count' = 0) & 
-            (suspicion_count' = (p_malicious_init > 0) ? ((trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) : 0) &
-            (trust_credit' = (p_malicious_init > 0) ? ((trust_credit=1) ? 0 : 1) : 0) &
+            (suspicion_count' = (trust_credit=1) ? max(0, suspicion_count - DECAY_RATE) : suspicion_count) &
+            (trust_credit' = (trust_credit=1) ? 0 : 1) &
             (backoff_timer' = COST_SUBNET_RPC) &
             (window_size' = max(1, floor(window_size/2))) & 
             (stage' = ((min(CUSTODY_REQUIREMENT, k_samples + 1) >= CUSTODY_REQUIREMENT) & (min(UNIQUE_SOURCES_NEEDED, unique_sources + (subnet_state!=0?1:0)) >= UNIQUE_SOURCES_NEEDED)) ? 2 : 1) & 
             (step' = 1) +
 
      // RPC Fail
-     // Physical failure, retain trust
        (p_w3_all_hon * pow(p_outcome_waste_good, 3) * (1.0 - P_RPC_EFFECTIVE)) : 
        (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count+1)) & 
        (window_size' = max(1, floor(window_size/2))) & 
-       (suspicion_count' = (p_malicious_init > 0) ? min(MAX_SUSPICION, suspicion_count + PENALTY_MINOR) : 0) &
+       (suspicion_count' = min(MAX_SUSPICION, suspicion_count + PENALTY_MINOR)) &
        (trust_credit' = trust_credit) & 
        (backoff_timer' = COST_DHT_REPAIR) & 
        (stage' = stage) & (step' = 1) +
@@ -1018,61 +972,43 @@ module System
        (p_w3_all_hon * max(0.0, pow(p_phys_tx, 3) - pow(p_log_valid, 3))) :(trust_credit' = trust_credit) & (backoff_timer' = COST_SAMPLE_RTT) & (step' = 1);
 
     // =========================================================================
-    // [Action 5: Stage 2 Background Repair] (Critical Repair)
+    // [Action 5: Stage 2 Background Repair]
     // =========================================================================
-    // Logic: If voted (Stage 2) but data missing (Custody 0), attempt background repair
-    // This breaks the deadlock, allowing custody to go from 0 to 1
-    
     [] (stage=2) & (step=0) & (custody_status=0) ->
-        
-        // Branch A: Repair Success
-        // Use p_repair_network_only or p_tx_success as probability
-       P_REPAIR_OUTCOME : 
-            (custody_status' = 1) &  // Success! Data completed
+        P_REPAIR_OUTCOME : 
+            (custody_status' = 1) & 
             (fail_count' = 0) & 
             (step' = 0) +
-            
-        // Branch B: Repair Fail, Keep Waiting
         (1.0 - P_REPAIR_OUTCOME ) : 
-            (custody_status' = 0) &  // Keep 0, try again next round
+            (custody_status' = 0) & 
             (fail_count' = min(MAX_FAIL_TOLERANCE, fail_count + 1)) &
             (step' = 0) ;
 
     // =========================================================================
-    // [Step 1: Environment Update] (Endogenous Feedback)
+    // [Step 1: Environment Update]
     // =========================================================================
-    
     [] (is_running) & (step=1) ->
-        // Branch 1: Spike (Congestion Increase)
-        // 1.1 Spike & Attacked
         (p_matrix_spike * p_int) : (step'=0) & 
             (network_load' = min(MAX_NETWORK_LOAD, network_load + 1)) & 
             (net_state' = (min(MAX_NETWORK_LOAD, network_load + 1) >= HIGH_USAGE_THRES) ? 1 : net_state) & 
             (subnet_state' = (p_malicious_init > 0 & subnet_state=1) ? 0 : subnet_state) +
-        // 1.2 Spike & Safe
         (p_matrix_spike * (1.0 - p_int)) : (step'=0) & 
             (network_load' = min(MAX_NETWORK_LOAD, network_load + 1)) & 
             (net_state' = (min(MAX_NETWORK_LOAD, network_load + 1) >= HIGH_USAGE_THRES) ? 1 : net_state) & 
             (subnet_state' = subnet_state) +
             
-        // Branch 2: Ease (Congestion Decrease)
-        // 2.1 Ease & Attacked
         (p_matrix_ease * p_int) : (step'=0) & 
             (network_load' = max(0, network_load - 1)) & 
             (net_state' = ((max(0, network_load - 1) >= HIGH_USAGE_THRES) ? 1 : 0)) & 
             (subnet_state' = (p_malicious_init > 0 & subnet_state=1) ? 0 : subnet_state) + 
-        // 2.2 Ease & Safe
         (p_matrix_ease * (1.0 - p_int)) : (step'=0) & 
             (network_load' = max(0, network_load - 1)) & 
             (net_state' = ((max(0, network_load - 1) >= HIGH_USAGE_THRES) ? 1 : 0)) & 
             (subnet_state' = subnet_state) +
 
-        // Branch 3: Stay (No Change)
-        // 3.1 Stay & Attacked
         (p_matrix_stay * p_int) : (step'=0) & 
             (net_state' = (is_high_usage ? 1 : 0)) & 
             (subnet_state' = (p_malicious_init > 0 & subnet_state=1) ? 0 : subnet_state) + 
-        // 3.2 Stay & Safe
         (p_matrix_stay * (1.0 - p_int)) : (step'=0) & 
             (net_state' = (is_high_usage ? 1 : 0)) & 
             (subnet_state' = subnet_state);
@@ -1131,7 +1067,7 @@ rewards "bandwidth_usage"
     //  Repair Phase Bandwidth (Stage 3 Entry)
     // Logic: Pay total bandwidth for "Query Signal + Data Download" when entering repair state
     [] (stage=1) & (step=0) & (backoff_timer=0) & 
-       (need_switch | ((p_malicious_init > 0) & (k_samples >= CUSTODY_REQUIREMENT))) &
+       (need_switch | (k_samples >= CUSTODY_REQUIREMENT)) &
        (k_samples < CUSTODY_REQUIREMENT | unique_sources < UNIQUE_SOURCES_NEEDED) :
        
        // 1. Data part: Repair missing parts, multiply by 1.1 (protocol header)
